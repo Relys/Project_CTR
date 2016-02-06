@@ -913,53 +913,21 @@ int GetARM11StaticMappings(ARM11KernelCapabilityDescriptor *desc, rsf_settings *
 	for(int i = 0; i < rsf->AccessControlInfo.MemoryMappingNum; i++){
 		if(strlen(rsf->AccessControlInfo.MemoryMapping[i])){
 			char *AddressStartStr = rsf->AccessControlInfo.MemoryMapping[i];
-			char *AddressEndStr = strstr(AddressStartStr,"-");
 			char *ROFlagStr = strstr(AddressStartStr,":");
 			bool IsRO = false; 
 			if(ROFlagStr)
 				IsRO = strcasecmp(ROFlagStr,":r") == 0 ? true : false;
 
-			if(AddressEndStr){
-				if(strlen(AddressEndStr) > 1) {
-					AddressEndStr = (AddressEndStr+1);
-					if(AddressEndStr == ROFlagStr)
-						AddressEndStr = NULL;
-				}
-				else 
-					AddressEndStr = NULL;
-			}
 			u32 AddressStart = strtoul(AddressStartStr,NULL,16);
 			if(!IsStartAddress(AddressStart)){
 				fprintf(stderr,"[EXHEADER ERROR] Address 0x%x (%s) is not valid mapping start address.\n",AddressStart,AddressStartStr);
 				return EXHDR_BAD_RSF_OPT;
 			}
-			if(!AddressEndStr){ // No End Addr Was Specified
-				SetARM11KernelDescValue(desc,descUsed,GetStaticMappingDesc(AddressStart,IsRO));
-				SetARM11KernelDescValue(desc,descUsed+1,GetStaticMappingDesc(AddressStart+0x1000, true));
-				descUsed += 2;
-				continue;
-			}
-
-			u32 AddressEnd = strtoul(AddressEndStr,NULL,16);
-			if(!IsEndAddress(AddressEnd)){
-				fprintf(stderr,"[EXHEADER ERROR] Address 0x%x (%s) is not valid mapping end address.\n",AddressEnd,AddressEndStr);
-				return EXHDR_BAD_RSF_OPT;
-			}
 
 			u32 DescStartAddr = GetStaticMappingDesc(AddressStart,IsRO);
-			u32 DescEndAddr = GetStaticMappingDesc(AddressEnd+0x1000,true);
-			if(DescStartAddr != DescEndAddr){
-				SetARM11KernelDescValue(desc,descUsed,DescStartAddr);
-				SetARM11KernelDescValue(desc,descUsed+1,DescEndAddr);
-				descUsed += 2;
-				continue;
-			}
-			else{
-				SetARM11KernelDescValue(desc,descUsed,GetStaticMappingDesc(AddressStart,IsRO));
-				SetARM11KernelDescValue(desc,descUsed+1,GetStaticMappingDesc(AddressStart+0x1000, true));
-				descUsed += 2;
-				continue;
-			}
+			SetARM11KernelDescValue(desc,descUsed,DescStartAddr);
+			descUsed++;
+			continue;
 		}
 	}
 	desc->num = descUsed;
