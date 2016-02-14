@@ -15,6 +15,7 @@ typedef enum
 
 typedef enum
 {
+	VER_MAX = 65535,
 	VER_MAJOR_MAX = 63,
 	VER_MINOR_MAX = 63,
 	VER_MICRO_MAX = 15,
@@ -69,9 +70,6 @@ typedef struct
 		bool EnableCompress;
 		bool FreeProductCode;
 		bool UseOnSD;
-
-		// Strings
-		char *PageSize;
 	} Option;
 	
 	struct{
@@ -86,12 +84,17 @@ typedef struct
 		bool UseOtherVariationSaveData;
 		bool RunnableOnSleep;
 		bool SpecialMemoryArrange;
-		
+		bool CanAccessCore2;
+		bool UseExtSaveData;
+		bool EnableL2Cache;
+
 		// Strings
 		char *IdealProcessor;
 		char *Priority;
 		char *MemoryType;
 		char *SystemMode;
+		char *SystemModeExt;
+		char *CpuSpeed;
 		char *CoreVersion;
 		char *HandleTableSize;
 		char *SystemSaveDataId1;
@@ -165,19 +168,8 @@ typedef struct
 	} RomFs;
 	
 	struct{
-		u32 TextNum;
-		char **Text;
-		u32 ReadOnlyNum;
-		char **ReadOnly;
-		u32 ReadWriteNum;
-		char **ReadWrite;
-	} ExeFs;
-	
-	u32 PlainRegionNum;
-	char **PlainRegion;
-	
-	struct{
 		// Strings
+		char *Platform;
 		char *Category;
 		char *UniqueId;
 		char *Version;
@@ -297,6 +289,7 @@ typedef struct
 
 		bool useNormTitleVer;
 		bool useDataTitleVer;
+		bool useFullTitleVer;
 		u16 titleVersion[3];
 		
 		u32 deviceId;

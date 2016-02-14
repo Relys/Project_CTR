@@ -1,4 +1,5 @@
 #pragma once
+#include "desc/desc.h"
 
 typedef enum
 {
@@ -26,18 +27,7 @@ typedef enum
 	pki_DEVELOPMENT,
 	pki_PRODUCTION,
 	pki_CUSTOM,
-	pki_GATEWAY3DS
 } pki_keyset;
-
-typedef enum
-{
-	desc_preset_NONE,
-	desc_preset_APP,
-	desc_preset_EC_APP,
-	desc_preset_DLP,
-	desc_preset_DEMO,
-	desc_preset_FIRM,
-} fixed_accessdesc_type;
 
 // Structs
 
@@ -49,7 +39,7 @@ typedef struct
 
 	struct
 	{
-		fixed_accessdesc_type presetType;
+		u32 presetType;
 		u32 targetFirmware;
 	} accessDescSign;
 
@@ -103,9 +93,7 @@ void InitKeys(keys_struct *keys);
 int SetKeys(keys_struct *keys);
 void FreeKeys(keys_struct *keys);
 
-int SetCommonKey(keys_struct *keys, u8 *commonKey, u8 Index);
+int SetCommonKey(keys_struct *keys, const u8 *key, u8 Index);
 int SetCurrentCommonKey(keys_struct *keys, u8 Index);
-int SetNormalKey(keys_struct *keys, u8 *systemFixedKey);
-int SetSystemFixedKey(keys_struct *keys, u8 *systemFixedKey);
-
-u8* AesKeyScrambler(u8 *key, u8 *keyX, u8 *keyY);
+int SetNormalKey(keys_struct *keys, const u8 *key);
+int SetSystemFixedKey(keys_struct *keys, const u8 *key);

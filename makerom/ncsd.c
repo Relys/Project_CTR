@@ -153,7 +153,7 @@ int ImportNcchForCci(cci_settings *set)
 
 bool CanCiaBeCci(u64 titleId, u16 count, tmd_content_chunk *content)
 {
-	if(GetTidCategory(titleId) != PROGRAM_ID_CATEGORY_APPLICATION && GetTidCategory(titleId) != PROGRAM_ID_CATEGORY_SYSTEM_APPLICATION)
+	if(GetTidCategory(titleId) != PROGRAM_ID_CATEGORY_APPLICATION)
 		return false;
 		
 	if(count > CCI_MAX_CONTENT)
@@ -222,6 +222,7 @@ int ProcessCiaForCci(cci_settings *set)
 	return 0;
 }
 
+/* This need to be more automagical */
 void GetTitleSaveSize(cci_settings *set)
 {
 	if(set->rsf->SystemControlInfo.SaveDataSize)
@@ -615,6 +616,10 @@ int CheckRomConfig(cci_settings *set)
 
 void WriteCciDataToOutput(cci_settings *set)
 {
+	if (set->options.verbose) {
+		printf("[CCI] Writing header to file... ");
+	}
+
 	// NCSD Header
 	WriteBuffer(set->headers.ccihdr.buffer, set->headers.ccihdr.size, 0, set->out);
 	// Card Info Header
@@ -629,18 +634,34 @@ void WriteCciDataToOutput(cci_settings *set)
 		memset(dummy_data, 0xff, len);
 	WriteBuffer(dummy_data, len, (set->headers.ccihdr.size + set->headers.cardinfohdr.size),set->out);	
 	free(dummy_data);
+
+	if (set->options.verbose) {
+		printf("Done!\n");
+	}
 	
 	// NCCH Partitions
 	u8 *ncch;
 	for(int i = 0; i < CCI_MAX_CONTENT; i++){
 		if(set->content.active[i]){
+			if (set->options.verbose) {
+				printf("[CCI] Writing content %d to file... ", i);
+			}
+
 			ncch = set->content.data + set->content.dOffset[i];
 			WriteBuffer(ncch, set->content.dSize[i], set->content.cOffset[i], set->out);
+
+			if (set->options.verbose) {
+				printf("Done!\n");
+			}
 		}
 	}	
 	
 	// Cci Padding
 	if(set->options.padCci){
+		if (set->options.verbose) {
+			printf("[CCI] Writing padding to file... ");
+		}
+
 		fseek_64(set->out,set->romInfo.usedSize);
 
 		// Determining Size of Padding
@@ -655,6 +676,10 @@ void WriteCciDataToOutput(cci_settings *set)
 			fwrite(pad,set->romInfo.blockSize,1,set->out);
 			
 		free(pad);
+
+		if (set->options.verbose) {
+			printf("Done!");
+		}
 	}
 	
 	return;

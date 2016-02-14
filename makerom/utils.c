@@ -1,24 +1,10 @@
 #include "lib.h"
-#include "utf.h"
-
 #include "polarssl/base64.h"
 
-// Memory
-void endian_memcpy(u8 *destination, u8 *source, u32 size, int endianness)
-{ 
-    for (u32 i = 0; i < size; i++){
-        switch (endianness){
-            case(BE):
-                destination[i] = source[i];
-                break;
-            case(LE):
-                destination[i] = source[((size-1)-i)];
-                break;
-        }
-    }
-}
+#define IO_BLOCKSIZE 5*MB
 
-int CopyData(u8 **dest, u8 *source, u64 size)
+// Memory
+int CopyData(u8 **dest, const u8 *source, u64 size)
 {
 	if(!*dest){
 		*dest = malloc(size);
@@ -67,27 +53,27 @@ u64 max64(u64 a, u64 b)
 }
 
 // Strings
-int append_filextention(char *output, u16 max_outlen, char *input, char extention[])
+char* replace_filextention(const char *input, const char *new_ext)
 {
-	if(output == NULL || input == NULL){
-		printf("[!] Memory Error\n");
-		return Fail;
+	if(input == NULL || new_ext == NULL)
+		return NULL;
+
+	char *new_name;
+	char *ext = strrchr(input, '.');
+
+	// If there is no existing extention, just append new_ext
+	if (!ext) {
+		new_name = calloc(strlen(input) + strlen(new_ext), 1);
+		sprintf(new_name, "%s%s", input, new_ext);
 	}
-	memset(output,0,max_outlen);
-	u16 extention_point = strlen(input)+1;
-	for(int i = strlen(input)-1; i > 0; i--){
-		if(input[i] == '.'){
-			extention_point = i;
-			break;
-		}
+	else {
+		u32 size = ext - input;
+		new_name = calloc(size + strlen(new_ext) + 1, 1);
+		strncpy(new_name, input, size);
+		sprintf(new_name, "%s%s", new_name, new_ext);
 	}
-	if(extention_point+strlen(extention) >= max_outlen){
-		printf("[!] Input File Name Too Large for Output buffer\n");
-		return Fail;
-	}
-	memcpy(output,input,extention_point);
-	sprintf(output,"%s%s",output,extention);
-	return 0;
+	
+	return new_name;
 }
 
 void memdump(FILE* fout, const char* prefix, const u8* data, u32 size)
@@ -117,64 +103,6 @@ void memdump(FILE* fout, const char* prefix, const u8* data, u32 size)
 		offs += max;
 	}
 }
-
-int str_u8_to_u16(u16 **dst, u32 *dst_len, u8 *src, u32 src_len)
-{
-	*dst_len = src_len*sizeof(u16);
-	*dst = malloc((*dst_len)+sizeof(u16));
-	if(*dst == NULL)
-		return -1;
-	memset(*dst,0,(*dst_len)+sizeof(u16));
-	u16 *tmp = *dst;
-	for(int i=0; i<src_len; i++)
-		tmp[i] = (u16)src[i];
-	return 0;
-}
-
-int str_u16_to_u16(u16 **dst, u32 *dst_len, u16 *src, u32 src_len)
-{
-	*dst_len = src_len*sizeof(u16);
-	*dst = malloc((*dst_len)+sizeof(u16));
-	if(*dst == NULL)
-		return -1;
-	memset(*dst,0,(*dst_len)+sizeof(u16));
-	u16 *tmp = *dst;
-	for(int i=0; i<src_len; i++)
-		tmp[i] = src[i];
-	return 0;
-}
-
-int str_u32_to_u16(u16 **dst, u32 *dst_len, u32 *src, u32 src_len)
-{
-	*dst_len = src_len*sizeof(u16);
-	*dst = malloc((*dst_len)+sizeof(u16));
-	if(*dst == NULL)
-		return -1;
-	memset(*dst,0,(*dst_len)+sizeof(u16));
-	u16 *tmp = *dst;
-	for(int i=0; i<src_len; i++)
-		tmp[i] = (u16)src[i];
-	return 0;
-}
-
-#ifndef _WIN32
-int str_utf8_to_u16(u16 **dst, u32 *dst_len, u8 *src, u32 src_len)
-{
-	*dst_len = src_len*sizeof(u16);
-	*dst = malloc((*dst_len)+sizeof(u16));
-	if(*dst == NULL)
-		return -1;
-	memset(*dst,0,(*dst_len)+sizeof(u16));
-	
-	UTF16 *target_start = *dst;
-	UTF16 *target_end = (target_start + *dst_len);
-	
-	UTF8 *src_start = (UTF8*)src;
-	UTF8 *src_end = (UTF8*)(src+src_len*sizeof(u8));
-	
-	return ConvertUTF8toUTF16 ((const UTF8 **)&src_start, src_end, &target_start, target_end, strictConversion);
-}
-#endif
 
 // Base64
 bool IsValidB64Char(char chr)
@@ -328,15 +256,6 @@ int TruncateFile64(char *filename, u64 filelen)
 #endif	
 }
 
-// Wide Char IO
-#ifdef _WIN32
-u64 wGetFileSize64(u16 *filename)
-{
-	struct _stat64 st;
-	_wstat64((wchar_t*)filename, &st);
-	return st.st_size;
-}
-#endif
 
 //IO Misc
 u8* ImportFile(char *file, u64 size)
@@ -353,22 +272,28 @@ u8* ImportFile(char *file, u64 size)
 			return NULL;
 	}
 	FILE *fp = fopen(file,"rb");
-	fread(data,fsize,1,fp);
+	ReadFile64(data, fsize, 0, fp);
 	fclose(fp);
 
 	return data;
 }
 
-void WriteBuffer(void *buffer, u64 size, u64 offset, FILE *output)
+void WriteBuffer(const void *buffer, u64 size, u64 offset, FILE *fp)
 {
-	fseek_64(output,offset);
-	fwrite(buffer,size,1,output);
+	const u8* _buffer = (const u8*)buffer;
+	fseek_64(fp,offset);
+	for (; size > IO_BLOCKSIZE; size -= IO_BLOCKSIZE, _buffer += IO_BLOCKSIZE)
+		fwrite(_buffer, IO_BLOCKSIZE, 1, fp);
+	fwrite(_buffer,size,1,fp);
 } 
 
-void ReadFile64(void *outbuff, u64 size, u64 offset, FILE *file)
+void ReadFile64(void *outbuff, u64 size, u64 offset, FILE *fp)
 {
-	fseek_64(file,offset);
-	fread(outbuff,size,1,file);
+	u8* _buffer = (u8*)outbuff;
+	fseek_64(fp, offset);
+	for (; size > IO_BLOCKSIZE; size -= IO_BLOCKSIZE, _buffer += IO_BLOCKSIZE)
+		fread(_buffer, IO_BLOCKSIZE, 1, fp);
+	fread(_buffer, size, 1, fp);
 }
 
 int fseek_64(FILE *fp, u64 file_pos)
@@ -382,7 +307,7 @@ int fseek_64(FILE *fp, u64 file_pos)
 }
 
 //Data Size conversion
-u16 u8_to_u16(u8 *value, u8 endianness)
+u16 u8_to_u16(const u8 *value, u8 endianness)
 {
 	u16 new_value;
 	switch(endianness){
@@ -392,7 +317,7 @@ u16 u8_to_u16(u8 *value, u8 endianness)
 	return new_value;
 }
 
-u32 u8_to_u32(u8 *value, u8 endianness)
+u32 u8_to_u32(const u8 *value, u8 endianness)
 {
 	u32 new_value;
 	switch(endianness){
@@ -403,7 +328,7 @@ u32 u8_to_u32(u8 *value, u8 endianness)
 }
 
 
-u64 u8_to_u64(u8 *value, u8 endianness)
+u64 u8_to_u64(const u8 *value, u8 endianness)
 {
 	u64 ret = 0;
 	switch(endianness){

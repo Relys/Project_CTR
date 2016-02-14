@@ -1,35 +1,37 @@
-# Makerom Sources
-UTILS_OBJS = utils.o ctr_utils.o dir.o utf.o keyset.o titleid.o
-CIA_OBJS = cia.o certs.o tik.o tmd.o
-NCCH_OBJS = ncch.o exheader.o accessdesc.o exefs.o elf.o romfs.o romfs_import.o romfs_gen.o
-NCSD_OBJS = ncsd.o cardinfo.o
-SETTINGS_OBJS = user_settings.o rsf_settings.o
-LIB_API_OBJS = crypto.o yaml_parser.o blz.o
-
-OBJS = makerom.o $(UTILS_OBJS) $(LIB_API_OBJS) $(SETTINGS_OBJS) $(NCSD_OBJS) $(NCCH_OBJS) $(CIA_OBJS)
-
-# Libraries
-POLAR_OBJS = polarssl/aes.o polarssl/rsa.o  polarssl/sha1.o polarssl/sha2.o polarssl/base64.o polarssl/bignum.o polarssl/padlock.o polarssl/md.o polarssl/md_wrap.o polarssl/md5.o polarssl/sha4.o 
-YAML_OBJS = libyaml/api.o libyaml/dumper.o libyaml/emitter.o libyaml/loader.o libyaml/parser.o libyaml/reader.o libyaml/scanner.o libyaml/writer.o
+# Sources
+SRC_DIR = . polarssl libyaml
+OBJS = $(foreach dir,$(SRC_DIR),$(subst .c,.o,$(wildcard $(dir)/*.c)))
 
 # Compiler Settings
-LIBS = -static-libgcc -static-libstdc++
-CXXFLAGS = -I.
-CFLAGS = --std=c99 -Wall -Wno-unused-but-set-variable -Wno-unused-value -I. -DMAKEROM_VER_MAJOR=$(VER_MAJOR) -DMAKEROM_VER_MINOR=$(VER_MINOR) $(MAKEROM_BUILD_FLAGS) -m64
+CFLAGS = --std=c99 -O2 -flto -Wall -Wno-unused-value -Wno-unused-result -I.
 CC = gcc
- 
+ifeq ($(OS),Windows_NT)
+    #Windows Build CFG
+    CFLAGS += -Wno-unused-but-set-variable
+    LIBS += -static-libgcc
+else
+    UNAME_S := $(shell uname -s)
+    ifeq ($(UNAME_S),Darwin)
+        # OS X
+        CFLAGS +=
+        LIBS += -liconv
+    else
+        # Linux
+        CFLAGS += -Wno-unused-but-set-variable
+        LIBS +=
+    endif
+endif
+
+
 # MAKEROM Build Settings
-MAKEROM_BUILD_FLAGS = #-DDEBUG
-VER_MAJOR = 0
-VER_MINOR = 13
 OUTPUT = makerom
 
 main: build
 
 rebuild: clean build
 
-build: $(OBJS) $(POLAR_OBJS) $(YAML_OBJS)
-	g++ -o $(OUTPUT) $(LIBS) $(OBJS) $(POLAR_OBJS) $(YAML_OBJS) -m64
+build: $(OBJS)
+	$(CC) -o $(OUTPUT) $(LIBS) $(OBJS)
 
 clean:
-	rm -rf $(OUTPUT) $(OBJS) $(POLAR_OBJS) $(YAML_OBJS) *.cci *.cia *.cxi *.cfa
+	rm -rf $(OUTPUT) $(OBJS)

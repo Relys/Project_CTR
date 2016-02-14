@@ -8,6 +8,23 @@ typedef enum
 
 typedef enum
 {
+	sysmode_64MB, // prod
+	sysmode_UNK, // null
+	sysmode_96MB, // dev1
+	sysmode_80MB, // dev2
+	sysmode_72MB, // dev3
+	sysmode_32MB, // dev4
+} system_mode;
+
+typedef enum
+{
+	sysmode_ext_LEGACY,
+	sysmode_ext_124MB, // snake Prod
+	sysmode_ext_178MB, // snake Dev1
+} system_mode_ext;
+
+typedef enum
+{
 	memtype_APPLICATION = 1,
     memtype_SYSTEM = 2,
     memtype_BASE = 3
@@ -30,6 +47,12 @@ typedef enum
 
 typedef enum
 {
+	cpuspeed_268MHz,
+	cpuspeed_804MHz
+} cpu_speed;
+
+typedef enum
+{
 	othcap_PERMIT_DEBUG = (1 << 0),
 	othcap_FORCE_DEBUG = (1 << 1),
 	othcap_CAN_USE_NON_ALPHABET_AND_NUMBER = (1 << 2),
@@ -39,6 +62,7 @@ typedef enum
 	othcap_CAN_SHARE_DEVICE_MEMORY = (1 << 6),
 	othcap_RUNNABLE_ON_SLEEP = (1 << 7),
 	othcap_SPECIAL_MEMORY_ARRANGE = (1 << 12),
+	othcap_CAN_ACCESS_CORE2 = (1 << 13),
 } other_capabilities_flags;
 
 typedef enum
@@ -97,7 +121,14 @@ typedef struct
 {
 	u8 name[8];
 	u8 padding0[5];
-	u8 flag;
+	union {
+		u8 flag;
+		struct {
+			u8 compressExeFs0 : 1;
+			u8 useOnSd : 1;
+		};
+	};
+	
 	u8 remasterVersion[2]; // le u16
 	exhdr_CodeSegmentInfo text;
 	u8 stackSize[4]; // le u32
@@ -127,13 +158,27 @@ typedef struct
 {
 	u8 programId[8];
 	u8 coreVersion[4];
-	u8 padding0[2];
-	u8 flag;
-	u8 priority;
+	union {
+		u8 flag[4];
+		struct {
+			u8 enableL2Cache : 1;
+			u8 cpuSpeed : 1;
+			u8: 6;
+
+			u8 systemModeExt : 4;
+			u8: 4;
+
+			u8 idealProcessor : 2;
+			u8 affinityMask : 2;
+			u8 systemMode : 4;
+
+			s8 threadPriority;
+		};
+	};
 	u8 resourceLimitDescriptor[16][2];
 	exhdr_StorageInfo storageInfo;
-	u8 serviceAccessControl[32][8]; // Those char[8] server names
-	u8 padding1[0x1f];
+	u8 serviceAccessControl[34][8]; // Those char[8] server names
+	u8 padding1[0xf];
 	u8 resourceLimitCategory;
 } exhdr_ARM11SystemLocalCapabilities;
 

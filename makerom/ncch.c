@@ -1,9 +1,9 @@
 #include "lib.h"
-#include "dir.h"
+#include "aes_keygen.h"
 #include "ncch_build.h"
 #include "exheader_build.h"
 #include "exheader_read.h"
-#include "elf.h"
+#include "code.h"
 #include "exefs_build.h"
 #include "exefs_read.h"
 #include "romfs.h"
@@ -12,6 +12,8 @@
 #include "ncch_logo.h" // Contains Logos
 
 const u32 NCCH_BLOCK_SIZE = 0x200;
+const char *DEFAULT_PRODUCT_CODE = "CTR-P-CTAP";
+const char *DEFAULT_MAKER_CODE = "00";
 
 // Private Prototypes
 int SignCFA(ncch_hdr *hdr, keys_struct *keys);
@@ -49,8 +51,7 @@ int SignCXI(ncch_hdr *hdr, keys_struct *keys)
 
 int CheckCXISignature(ncch_hdr *hdr, u8 *pubk)
 {
-	int result = RsaSignVerify(GetNcchHdrData(hdr),GetNcchHdrDataLen(hdr),GetNcchHdrSig(hdr),pubk,NULL,RSA_2048_SHA256,CTR_RSA_VERIFY);
-	return result;
+	return RsaSignVerify(GetNcchHdrData(hdr), GetNcchHdrDataLen(hdr), GetNcchHdrSig(hdr), pubk, NULL, RSA_2048_SHA256, CTR_RSA_VERIFY);
 }
 
 // NCCH Build Functions
@@ -338,6 +339,15 @@ int ImportLogo(ncch_settings *set)
 			}
 			memcpy(set->sections.logo.buffer,iQue_without_ISBN_LZ,0x2000);
 		}
+		else if (strcasecmp(set->rsfSet->BasicInfo.Logo, "homebrew") == 0) {
+			set->sections.logo.size = 0x2000;
+			set->sections.logo.buffer = malloc(set->sections.logo.size);
+			if (!set->sections.logo.buffer) {
+				fprintf(stderr, "[NCCH ERROR] Not enough memory\n");
+				return MEM_ERROR;
+			}
+			memcpy(set->sections.logo.buffer, Homebrew_LZ, 0x2000);
+		}
 		else if(strcasecmp(set->rsfSet->BasicInfo.Logo,"none") != 0){
 			fprintf(stderr,"[NCCH ERROR] Invalid logo name\n");
 			return NCCH_BAD_RSF_SET;
@@ -535,12 +545,19 @@ int FinaliseNcch(ncch_settings *set)
 
 		// Crypting Exheader/AcexDesc
 		if(set->cryptoDetails.exhdrSize){
+			if (set->options.verbose)
+				printf("[NCCH] Encypting Exheader... ");
 			CryptNcchRegion(exhdr,set->cryptoDetails.exhdrSize,0x0,set->cryptoDetails.titleId,set->keys->aes.ncchKey0,ncch_exhdr);
 			CryptNcchRegion(acexDesc,set->cryptoDetails.acexSize,set->cryptoDetails.exhdrSize,set->cryptoDetails.titleId,set->keys->aes.ncchKey0,ncch_exhdr);
+			if (set->options.verbose)
+				printf("Done!\n");
 		}			
 
 		// Crypting ExeFs Files
 		if(set->cryptoDetails.exefsSize){
+			if (set->options.verbose)
+				printf("[NCCH] Encrypting ExeFS... ");
+
 			exefs_hdr *exefsHdr = (exefs_hdr*)exefs;
 			for(int i = 0; i < MAX_EXEFS_SECTIONS; i++){
 				u8 *key = NULL;
@@ -558,11 +575,19 @@ int FinaliseNcch(ncch_settings *set)
 			}
 			// Crypting ExeFs Header
 			CryptNcchRegion(exefs,sizeof(exefs_hdr),0x0,set->cryptoDetails.titleId,set->keys->aes.ncchKey0,ncch_exefs);
+
+			if (set->options.verbose)
+				printf("Done!\n");
 		}
 
 		// Crypting RomFs
-		if(set->cryptoDetails.romfsSize)
-			CryptNcchRegion(romfs,set->cryptoDetails.romfsSize,0x0,set->cryptoDetails.titleId,set->keys->aes.ncchKey1,ncch_romfs);
+		if (set->cryptoDetails.romfsSize) {
+			if (set->options.verbose)
+				printf("[NCCH] Encrypting RomFS... ");
+			CryptNcchRegion(romfs, set->cryptoDetails.romfsSize, 0x0, set->cryptoDetails.titleId, set->keys->aes.ncchKey1, ncch_romfs);
+			if (set->options.verbose)
+				printf("Done!\n");
+		}
 	}
 
 	return 0;
@@ -592,18 +617,20 @@ int SetCommonHeaderBasicData(ncch_settings *set, ncch_hdr *hdr)
 			fprintf(stderr,"[NCCH ERROR] Invalid Product Code\n");
 			return NCCH_BAD_RSF_SET;
 		}
-		memcpy(hdr->productCode,set->rsfSet->BasicInfo.ProductCode,strlen((char*)set->rsfSet->BasicInfo.ProductCode));
+		strncpy((char*)hdr->productCode,set->rsfSet->BasicInfo.ProductCode, 16);
 	}
-	else memcpy(hdr->productCode,"CTR-P-CTAP",10);
+	else
+		strncpy((char*)hdr->productCode, DEFAULT_PRODUCT_CODE, 16);
 
 	if(set->rsfSet->BasicInfo.CompanyCode){
 		if(strlen((char*)set->rsfSet->BasicInfo.CompanyCode) != 2){
 			fprintf(stderr,"[NCCH ERROR] CompanyCode length must be 2\n");
 			return NCCH_BAD_RSF_SET;
 		}
-		memcpy(hdr->makerCode,set->rsfSet->BasicInfo.CompanyCode,2);
+		strncpy((char*)hdr->makerCode, set->rsfSet->BasicInfo.CompanyCode, 2);
 	}
-	else memcpy(hdr->makerCode,"00",2);
+	else
+		strncpy((char*)hdr->makerCode, DEFAULT_MAKER_CODE, 2);
 
 	// Setting Encryption Settings
 	if(!set->options.Encrypt)
@@ -626,28 +653,48 @@ int SetCommonHeaderBasicData(ncch_settings *set, ncch_hdr *hdr)
 	hdr->flags[ncchflag_CONTENT_BLOCK_SIZE] = GetCtrBlockSizeFlag(set->options.blockSize);
 
 	/* Setting ContentPlatform */
-	hdr->flags[ncchflag_CONTENT_PLATFORM] = 1; // CTR
+	if(set->rsfSet->TitleInfo.Platform){
+		if(strcasecmp(set->rsfSet->TitleInfo.Platform, "ctr") == 0)
+			hdr->flags[ncchflag_CONTENT_PLATFORM] = platform_CTR;
+		else if (strcasecmp(set->rsfSet->TitleInfo.Platform, "snake") == 0)
+			hdr->flags[ncchflag_CONTENT_PLATFORM] = platform_SNAKE;
+		else{
+			fprintf(stderr, "[NCCH ERROR] Invalid Platform '%s'\n", set->rsfSet->TitleInfo.Platform);
+			return NCCH_BAD_RSF_SET;
+		}
+	}
+	else
+		hdr->flags[ncchflag_CONTENT_PLATFORM] = platform_CTR;
 
 	/* Setting OtherFlag */
 	if(!set->options.UseRomFS) 
 		hdr->flags[ncchflag_OTHER_FLAG] |= otherflag_NoMountRomFs;
 
 
+	/* Setting FormType */
+	hdr->flags[ncchflag_CONTENT_TYPE] = form_Unassigned;
+	if(set->options.IsCfa)
+		hdr->flags[ncchflag_CONTENT_TYPE] = form_SimpleContent;
+	else if (set->options.UseRomFS)
+		hdr->flags[ncchflag_CONTENT_TYPE] = form_Executable;
+	else
+		hdr->flags[ncchflag_CONTENT_TYPE] = form_ExecutableWithoutRomfs;
+	
 	/* Setting ContentType */
-	hdr->flags[ncchflag_CONTENT_TYPE] = 0;
-	if(set->options.UseRomFS) hdr->flags[ncchflag_CONTENT_TYPE] |= content_Data;
-	if(!set->options.IsCfa) hdr->flags[ncchflag_CONTENT_TYPE] |= content_Executable;
 	if(set->rsfSet->BasicInfo.ContentType){
-		if(strcmp(set->rsfSet->BasicInfo.ContentType,"Application") == 0) hdr->flags[ncchflag_CONTENT_TYPE] |= 0;
-		else if(strcmp(set->rsfSet->BasicInfo.ContentType,"SystemUpdate") == 0) hdr->flags[ncchflag_CONTENT_TYPE] |= content_SystemUpdate;
-		else if(strcmp(set->rsfSet->BasicInfo.ContentType,"Manual") == 0) hdr->flags[ncchflag_CONTENT_TYPE] |= content_Manual;
-		else if(strcmp(set->rsfSet->BasicInfo.ContentType,"Child") == 0) hdr->flags[ncchflag_CONTENT_TYPE] |= content_Child;
-		else if(strcmp(set->rsfSet->BasicInfo.ContentType,"Trial") == 0) hdr->flags[ncchflag_CONTENT_TYPE] |= content_Trial;
+		if(strcmp(set->rsfSet->BasicInfo.ContentType,"Application") == 0) hdr->flags[ncchflag_CONTENT_TYPE] |= (content_Application << 2);
+		else if(strcmp(set->rsfSet->BasicInfo.ContentType,"SystemUpdate") == 0) hdr->flags[ncchflag_CONTENT_TYPE] |= (content_SystemUpdate << 2);
+		else if(strcmp(set->rsfSet->BasicInfo.ContentType,"Manual") == 0) hdr->flags[ncchflag_CONTENT_TYPE] |= (content_Manual << 2);
+		else if(strcmp(set->rsfSet->BasicInfo.ContentType,"Child") == 0) hdr->flags[ncchflag_CONTENT_TYPE] |= (content_Child << 2);
+		else if(strcmp(set->rsfSet->BasicInfo.ContentType,"Trial") == 0) hdr->flags[ncchflag_CONTENT_TYPE] |= (content_Trial << 2);
+		else if (strcmp(set->rsfSet->BasicInfo.ContentType, "ExtendedSystemUpdate") == 0) hdr->flags[ncchflag_CONTENT_TYPE] |= (content_ExtendedSystemUpdate << 2);
 		else{
 			fprintf(stderr,"[NCCH ERROR] Invalid ContentType '%s'\n",set->rsfSet->BasicInfo.ContentType);
 			return NCCH_BAD_RSF_SET;
 		}
 	}
+	else 
+		hdr->flags[ncchflag_CONTENT_TYPE] |= (content_Application << 2);
 
 	return 0;
 }
@@ -663,7 +710,7 @@ bool IsValidProductCode(char *ProductCode, bool FreeProductCode)
 	if(strlen(ProductCode) < 10) 
 		return false;
 		
-	if(strncmp(ProductCode,"CTR",3) != 0) 
+	if(strncmp(ProductCode,"CTR",3) != 0 && strncmp(ProductCode, "KTR", 3) != 0)
 		return false;
 	
 	for(int i = 3; i < 10; i++){
@@ -946,12 +993,12 @@ bool IsNcch(FILE *fp, u8 *buf)
 
 bool IsCfa(ncch_hdr* hdr)
 {
-	return (((hdr->flags[ncchflag_CONTENT_TYPE] & content_Data) == content_Data) && ((hdr->flags[ncchflag_CONTENT_TYPE] & content_Executable) != content_Executable));
+	return (hdr->flags[ncchflag_CONTENT_TYPE] & 3) == form_SimpleContent;
 }
 
 bool IsUpdateCfa(ncch_hdr* hdr)
 {
-	return (((hdr->flags[ncchflag_CONTENT_TYPE] & content_SystemUpdate) == content_SystemUpdate) && ((hdr->flags[ncchflag_CONTENT_TYPE] & content_Child) != content_Child) && IsCfa(hdr));
+	return (hdr->flags[ncchflag_CONTENT_TYPE] >> 2) == content_SystemUpdate || (hdr->flags[ncchflag_CONTENT_TYPE] >> 2) == content_ExtendedSystemUpdate;
 }
 
 u32 GetNcchBlockSize(ncch_hdr* hdr)
@@ -997,12 +1044,12 @@ bool SetNcchKeys(keys_struct *keys, ncch_hdr *hdr)
 	}
 	
 	if(keys->aes.ncchKeyX[0])
-		AesKeyScrambler(keys->aes.ncchKey0,keys->aes.ncchKeyX[0],hdr->signature);
+		ctr_aes_keygen(keys->aes.ncchKeyX[0],hdr->signature,keys->aes.ncchKey0);
 	else
 		return false;
 	
 	if(keys->aes.ncchKeyX[hdr->flags[ncchflag_CONTENT_KEYX]])
-		AesKeyScrambler(keys->aes.ncchKey1,keys->aes.ncchKeyX[hdr->flags[ncchflag_CONTENT_KEYX]],hdr->signature);
+		ctr_aes_keygen(keys->aes.ncchKeyX[ncchflag_CONTENT_KEYX], hdr->signature, keys->aes.ncchKey0);
 	else
 		return false;
 		
@@ -1016,7 +1063,7 @@ int GetNcchInfo(ncch_info *info, ncch_hdr *hdr)
 	info->titleId = u8_to_u64(hdr->titleId,LE);
 	info->programId = u8_to_u64(hdr->programId,LE);
 
-	u32 block_size = GetNcchBlockSize(hdr);
+	u64 block_size = GetNcchBlockSize(hdr);
 	
 	info->formatVersion = u8_to_u16(hdr->formatVersion,LE);
 	if(!IsCfa(hdr)){
@@ -1024,18 +1071,18 @@ int GetNcchInfo(ncch_info *info, ncch_hdr *hdr)
 		info->exhdrSize = u8_to_u32(hdr->exhdrSize,LE);
 		info->acexOffset = (info->exhdrOffset + info->exhdrSize);
 		info->acexSize = sizeof(access_descriptor);
-		info->plainRegionOffset = (u64)(u8_to_u32(hdr->plainRegionOffset,LE)*block_size);
-		info->plainRegionSize = (u64)(u8_to_u32(hdr->plainRegionSize,LE)*block_size);
+		info->plainRegionOffset = ((u64)u8_to_u32(hdr->plainRegionOffset,LE))*block_size;
+		info->plainRegionSize = ((u64)u8_to_u32(hdr->plainRegionSize,LE))*block_size;
 	}
 
-	info->logoOffset = (u64)(u8_to_u32(hdr->logoOffset,LE)*block_size);
-	info->logoSize = (u64)(u8_to_u32(hdr->logoSize,LE)*block_size);
-	info->exefsOffset = (u64)(u8_to_u32(hdr->exefsOffset,LE)*block_size);
-	info->exefsSize = (u64)(u8_to_u32(hdr->exefsSize,LE)*block_size);
-	info->exefsHashDataSize = (u64)(u8_to_u32(hdr->exefsHashSize,LE)*block_size);
-	info->romfsOffset = (u64) (u8_to_u32(hdr->romfsOffset,LE)*block_size);
-	info->romfsSize = (u64) (u8_to_u32(hdr->romfsSize,LE)*block_size);
-	info->romfsHashDataSize = (u64)(u8_to_u32(hdr->romfsHashSize,LE)*block_size);
+	info->logoOffset = ((u64)u8_to_u32(hdr->logoOffset,LE))*block_size;
+	info->logoSize = ((u64)u8_to_u32(hdr->logoSize,LE))*block_size;
+	info->exefsOffset = ((u64)u8_to_u32(hdr->exefsOffset,LE))*block_size;
+	info->exefsSize = ((u64)u8_to_u32(hdr->exefsSize,LE))*block_size;
+	info->exefsHashDataSize = ((u64)u8_to_u32(hdr->exefsHashSize,LE))*block_size;
+	info->romfsOffset = ((u64)u8_to_u32(hdr->romfsOffset,LE))*block_size;
+	info->romfsSize = ((u64)u8_to_u32(hdr->romfsSize,LE))*block_size;
+	info->romfsHashDataSize = ((u64)u8_to_u32(hdr->romfsHashSize,LE))*block_size;
 	return 0;
 }
 

@@ -2,6 +2,9 @@
 #include "ncch_read.h"
 #include "titleid.h"
 
+const u16 DEFAULT_CATEGORY = PROGRAM_ID_CATEGORY_APPLICATION;
+const u32 DEFAULT_UNIQUE_ID = 0xff3ff;
+
 void SetPIDType(u16 *type);
 int SetPIDCategoryFromName(u16 *cat, char *CategoryStr);
 int SetPIDCategoryFromFlags(u16 *cat, char **CategoryFlags, u32 FlagNum);
@@ -26,7 +29,7 @@ u32 GetTidUniqueId(u64 titleId)
 
 int GetProgramID(u64 *dest, rsf_settings *rsf, bool IsForExheader)
 {
-	int ret;
+	int ret = 0;
 	u32 uniqueId;
 	u16 type,category;
 	u8 variation;
@@ -40,22 +43,23 @@ int GetProgramID(u64 *dest, rsf_settings *rsf, bool IsForExheader)
 	SetPIDType(&type);
 	
 	// Getting Category
-	if(rsf->TitleInfo.Category) 
-		ret = SetPIDCategoryFromName(&category,rsf->TitleInfo.Category);
-	else if(rsf->TitleInfo.CategoryFlags) 
-		ret = SetPIDCategoryFromFlags(&category,rsf->TitleInfo.CategoryFlags,rsf->TitleInfo.CategoryFlagsNum);
 	if(IsForExheader && rsf->TitleInfo.TargetCategory)
 		ret = SetPIDCategoryFromName(&category,rsf->TitleInfo.TargetCategory);
+	else if (rsf->TitleInfo.Category)
+		ret = SetPIDCategoryFromName(&category, rsf->TitleInfo.Category);
+	else if (rsf->TitleInfo.CategoryFlags)
+		ret = SetPIDCategoryFromFlags(&category, rsf->TitleInfo.CategoryFlags, rsf->TitleInfo.CategoryFlagsNum);
+	else
+		category = DEFAULT_CATEGORY;
+
 	if(ret == PID_INVALID_CATEGORY) // Error occured
 		return PID_BAD_RSF_SET;
 
 	// Getting UniqueId
 	if(rsf->TitleInfo.UniqueId) 
 		GetUniqueID(&uniqueId,rsf);
-	else{
-		fprintf(stderr,"[ID ERROR] ParameterNotFound: \"TitleInfo/UniqueId\"\n");
-		return PID_BAD_RSF_SET;
-	}
+	else
+		uniqueId = DEFAULT_UNIQUE_ID;
 
 	// Getting Variation
 	if(SetTitleVariation(&variation,category,rsf) == PID_INVALID_VARIATION)

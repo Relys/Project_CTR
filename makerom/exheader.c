@@ -4,6 +4,7 @@
 #include "accessdesc.h"
 #include "titleid.h"
 
+const char *DEFAULT_EXHEADER_NAME = "CtrApp";
 
 /* Prototypes */
 void free_ExHeaderSettings(exheader_settings *exhdrset);
@@ -107,7 +108,7 @@ int get_ExHeaderSettingsFromNcchset(exheader_settings *exhdrset, ncch_settings *
 	/* Transfer settings */
 	exhdrset->keys = ncchset->keys;
 	exhdrset->rsf = ncchset->rsfSet;
-	exhdrset->useAccessDescPreset = ncchset->keys->accessDescSign.presetType != desc_preset_NONE;
+	exhdrset->useAccessDescPreset = ncchset->keys->accessDescSign.presetType != desc_NotSpecified;
 
 	/* Creating Output Buffer */
 	ncchset->sections.exhdr.size = sizeof(extended_hdr);
@@ -128,8 +129,6 @@ int get_ExHeaderSettingsFromNcchset(exheader_settings *exhdrset, ncch_settings *
 	exhdrset->exHdr = (extended_hdr*)ncchset->sections.exhdr.buffer;
 	exhdrset->acexDesc = (access_descriptor*)ncchset->sections.acexDesc.buffer;
 
-	/* BSS Size */
-	u32_to_u8(exhdrset->exHdr->codeSetInfo.bssSize,ncchset->codeDetails.bssSize,LE);
 	/* Data */
 	u32_to_u8(exhdrset->exHdr->codeSetInfo.data.address,ncchset->codeDetails.rwAddress,LE);
 	u32_to_u8(exhdrset->exHdr->codeSetInfo.data.codeSize,ncchset->codeDetails.rwSize,LE);
@@ -142,12 +141,16 @@ int get_ExHeaderSettingsFromNcchset(exheader_settings *exhdrset, ncch_settings *
 	u32_to_u8(exhdrset->exHdr->codeSetInfo.text.address,ncchset->codeDetails.textAddress,LE);
 	u32_to_u8(exhdrset->exHdr->codeSetInfo.text.codeSize,ncchset->codeDetails.textSize,LE);
 	u32_to_u8(exhdrset->exHdr->codeSetInfo.text.numMaxPages,ncchset->codeDetails.textMaxPages,LE);
+	/* BSS Size */
+	u32_to_u8(exhdrset->exHdr->codeSetInfo.bssSize, ncchset->codeDetails.bssSize, LE);
+	/* Stack Size */
+	u32_to_u8(exhdrset->exHdr->codeSetInfo.stackSize, ncchset->codeDetails.stackSize, LE);
 
 	/* Set Simple Flags */
 	if(ncchset->options.CompressCode)
-		exhdrset->exHdr->codeSetInfo.flag |= infoflag_COMPRESS_EXEFS_0;
-	if(ncchset->options.UseOnSD)
-		exhdrset->exHdr->codeSetInfo.flag |= infoflag_SD_APPLICATION;
+		exhdrset->exHdr->codeSetInfo.compressExeFs0 = true;
+	if (ncchset->options.UseOnSD)
+		exhdrset->exHdr->codeSetInfo.useOnSd = true;
 	if(!ncchset->options.UseRomFS)
 		exhdrset->exHdr->arm11SystemLocalCapabilities.storageInfo.otherAttributes |= attribute_NOT_USE_ROMFS;
 
@@ -189,25 +192,11 @@ finish:
 int get_ExHeaderCodeSetInfo(exhdr_CodeSetInfo *CodeSetInfo, rsf_settings *rsf)
 {
 	/* Name */
-	if(rsf->BasicInfo.Title){
-		//if(strlen(rsf->BasicInfo.Title) > 8){
-		//	fprintf(stderr,"[EXHEADER ERROR] Parameter Too Long \"BasicInfo/Title\"\n");
-		//	return EXHDR_BAD_RSF_OPT;
-		//}
-		strncpy((char*)CodeSetInfo->name,rsf->BasicInfo.Title,8);
-	}
-	else{
-		ErrorParamNotFound("BasicInfo/Title");
-		return EXHDR_BAD_RSF_OPT;
-	}
+	if (rsf->BasicInfo.Title)
+		strncpy((char*)CodeSetInfo->name, rsf->BasicInfo.Title, 8);
+	else
+		strncpy((char*)CodeSetInfo->name, DEFAULT_EXHEADER_NAME, 8);
 	
-	/* Stack Size */
-	if(rsf->SystemControlInfo.StackSize)
-		u32_to_u8(CodeSetInfo->stackSize, strtoul(rsf->SystemControlInfo.StackSize,NULL,0), LE);
-	else{
-		ErrorParamNotFound("SystemControlInfo/StackSize");
-		return EXHDR_BAD_RSF_OPT;
-	}
 	/* Remaster Version */
 	if(rsf->SystemControlInfo.RemasterVersion)
 		u16_to_u8(CodeSetInfo->remasterVersion, strtol(rsf->SystemControlInfo.RemasterVersion,NULL,0), LE);
@@ -317,44 +306,87 @@ int SetARM11SystemLocalInfoFlags(exhdr_ARM11SystemLocalCapabilities *arm11, rsf_
 		return EXHDR_BAD_RSF_OPT;
 	}
 
-	/* Flag */
-	u8 affinityMask = 0;
-	u8 idealProcessor = 0;
-	u8 systemMode = 0;
-	
+	/* Defaults */
+	arm11->enableL2Cache = false;
+	arm11->cpuSpeed = cpuspeed_268MHz;
+	arm11->systemModeExt = sysmode_ext_LEGACY;
+	arm11->affinityMask = 0;
+	arm11->idealProcessor = 0;
+	arm11->systemMode = sysmode_64MB;
+
+	/* flag[0] */
+	arm11->enableL2Cache |= rsf->AccessControlInfo.EnableL2Cache;
+
+	if (rsf->AccessControlInfo.CpuSpeed) {
+		if(strcasecmp(rsf->AccessControlInfo.CpuSpeed, "268mhz") == 0)
+			arm11->cpuSpeed |= cpuspeed_268MHz;
+		else if(strcasecmp(rsf->AccessControlInfo.CpuSpeed, "804mhz") == 0)
+			arm11->cpuSpeed |= cpuspeed_804MHz;
+		else {
+			fprintf(stderr, "[EXHEADER ERROR] Invalid cpu speed: 0x%s\n", rsf->AccessControlInfo.CpuSpeed);
+			return EXHDR_BAD_RSF_OPT;
+		}
+	}
+
+	/* flag[1] (SystemModeExt) */
+	if (rsf->AccessControlInfo.SystemModeExt) {
+		if (strcasecmp(rsf->AccessControlInfo.SystemModeExt, "Legacy") == 0)
+			arm11->systemModeExt = sysmode_ext_LEGACY;
+		else if (strcasecmp(rsf->AccessControlInfo.SystemModeExt, "124MB") == 0)
+			arm11->systemModeExt = sysmode_ext_124MB;
+		else if (strcasecmp(rsf->AccessControlInfo.SystemModeExt, "178MB") == 0)
+			arm11->systemModeExt = sysmode_ext_178MB;
+		
+		else {
+			fprintf(stderr, "[EXHEADER ERROR] Unexpected SystemModeExt: %s\n", rsf->AccessControlInfo.SystemModeExt);
+			return EXHDR_BAD_RSF_OPT;
+		}
+	} 
+
+	/* flag[2] */
 	if(rsf->AccessControlInfo.AffinityMask){
-		affinityMask = strtol(rsf->AccessControlInfo.AffinityMask,NULL,0);
-		if(affinityMask > 1){
-			fprintf(stderr,"[EXHEADER ERROR] Unexpected AffinityMask: %d. Expected range: 0x0 - 0x1\n",affinityMask);
+		arm11->affinityMask = strtol(rsf->AccessControlInfo.AffinityMask,NULL,0);
+		if(arm11->affinityMask > 1){
+			fprintf(stderr,"[EXHEADER ERROR] Unexpected AffinityMask: %d. Expected range: 0x0 - 0x1\n", arm11->affinityMask);
 			return EXHDR_BAD_RSF_OPT;
 		}
 	}
 	if(rsf->AccessControlInfo.IdealProcessor){
-		idealProcessor = strtol(rsf->AccessControlInfo.IdealProcessor,NULL,0);
-		if(idealProcessor > 1){
-			fprintf(stderr,"[EXHEADER ERROR] Unexpected IdealProcessor: %d. Expected range: 0x0 - 0x1\n",idealProcessor);
+		arm11->idealProcessor = strtol(rsf->AccessControlInfo.IdealProcessor,NULL,0);
+		if(arm11->idealProcessor > 1){
+			fprintf(stderr,"[EXHEADER ERROR] Unexpected IdealProcessor: %d. Expected range: 0x0 - 0x1\n", arm11->idealProcessor);
 			return EXHDR_BAD_RSF_OPT;
 		}
 	}
 	if(rsf->AccessControlInfo.SystemMode){
-		systemMode = strtol(rsf->AccessControlInfo.SystemMode,NULL,0);
-		if(systemMode > 15){
-			fprintf(stderr,"[EXHEADER ERROR] Unexpected SystemMode: 0x%x. Expected range: 0x0 - 0xf\n",systemMode);
+		if (strcasecmp(rsf->AccessControlInfo.SystemMode, "64MB") == 0 || strcasecmp(rsf->AccessControlInfo.SystemMode, "prod") == 0)
+			arm11->systemMode = sysmode_64MB;
+		//else if (strcasecmp(rsf->AccessControlInfo.SystemMode, "UNK") == 0 || strcasecmp(rsf->AccessControlInfo.SystemMode, "null") == 0)
+		//	arm11->systemMode = sysmode_UNK;
+		else if (strcasecmp(rsf->AccessControlInfo.SystemMode, "96MB") == 0 || strcasecmp(rsf->AccessControlInfo.SystemMode, "dev1") == 0)
+			arm11->systemMode = sysmode_96MB;
+		else if (strcasecmp(rsf->AccessControlInfo.SystemMode, "80MB") == 0 || strcasecmp(rsf->AccessControlInfo.SystemMode, "dev2") == 0)
+			arm11->systemMode = sysmode_80MB;
+		else if (strcasecmp(rsf->AccessControlInfo.SystemMode, "72MB") == 0 || strcasecmp(rsf->AccessControlInfo.SystemMode, "dev3") == 0)
+			arm11->systemMode = sysmode_72MB;
+		else if (strcasecmp(rsf->AccessControlInfo.SystemMode, "32MB") == 0 || strcasecmp(rsf->AccessControlInfo.SystemMode, "dev4") == 0)
+			arm11->systemMode = sysmode_32MB;
+
+		else {
+			fprintf(stderr, "[EXHEADER ERROR] Unexpected SystemMode: %s\n", rsf->AccessControlInfo.SystemMode);
 			return EXHDR_BAD_RSF_OPT;
 		}
 	}
-	arm11->flag = (u8)(systemMode << 4 | affinityMask << 2 | idealProcessor);
 
-	/* Thread Priority */
+	/* flag[3] (Thread Priority) */
 	if(rsf->AccessControlInfo.Priority){
-		u8 priority = strtoul(rsf->AccessControlInfo.Priority,NULL,0);
+		arm11->threadPriority = strtoul(rsf->AccessControlInfo.Priority,NULL,0);
 		if(GetAppType(rsf) == processtype_APPLICATION)
-			priority += 32;
-		if(priority > 127){
-			fprintf(stderr,"[EXHEADER ERROR] Invalid Priority: %d\n",priority);
+			arm11->threadPriority += 32;
+		if(arm11->threadPriority < 0){
+			fprintf(stderr,"[EXHEADER ERROR] Invalid Priority: %d\n", arm11->threadPriority);
 			return EXHDR_BAD_RSF_OPT;
 		}
-		arm11->priority = priority;
 	}
 	else{
 		ErrorParamNotFound("AccessControlInfo/Priority");
@@ -479,8 +511,13 @@ void SetARM11StorageInfoSystemSaveDataId(exhdr_ARM11SystemLocalCapabilities *arm
 
 void SetARM11StorageInfoExtSaveDataId(exhdr_ARM11SystemLocalCapabilities *arm11, rsf_settings *rsf)
 {
-	if(rsf->AccessControlInfo.ExtSaveDataId)
-		u64_to_u8(arm11->storageInfo.extSavedataId, strtoull(rsf->AccessControlInfo.ExtSaveDataId,NULL,0), LE);
+	if (rsf->AccessControlInfo.UseExtSaveData || rsf->AccessControlInfo.ExtSaveDataId) {
+		if (rsf->AccessControlInfo.ExtSaveDataId)
+			u64_to_u8(arm11->storageInfo.extSavedataId, strtoull(rsf->AccessControlInfo.ExtSaveDataId, NULL, 0), LE);
+		else
+			u32_to_u8(arm11->storageInfo.extSavedataId, GetTidUniqueId(u8_to_u64(arm11->programId,LE)), LE);
+	}
+	
 }
 
 void SetARM11StorageInfoOtherUserSaveData(exhdr_ARM11SystemLocalCapabilities *arm11, rsf_settings *rsf)
@@ -506,6 +543,10 @@ bool CheckCondiditionsForNewAccessibleSaveDataIds(rsf_settings *rsf)
 {
 	if(rsf->AccessControlInfo.AccessibleSaveDataIdsNum > 6){
 		fprintf(stderr,"[EXHEADER ERROR] Too many UniqueId in \"AccessibleSaveDataIds\".\n");
+		return false;
+	}
+	if (rsf->AccessControlInfo.UseExtSaveData) {
+		fprintf(stderr, "[EXHEADER ERROR] UseExtSaveData must be false if AccessibleSaveDataIds is specified.\n");
 		return false;
 	}
 	if (rsf->AccessControlInfo.ExtSaveDataId){
@@ -561,8 +602,8 @@ void SetARM11StorageInfoAccessibleSaveDataIds(exhdr_ARM11SystemLocalCapabilities
 int SetARM11ServiceAccessControl(exhdr_ARM11SystemLocalCapabilities *arm11, rsf_settings *rsf)
 {
 	if(rsf->AccessControlInfo.ServiceAccessControl){
-		if(rsf->AccessControlInfo.ServiceAccessControlNum > 32){
-			fprintf(stderr,"[EXHEADER ERROR] Too Many Service Names, maximum is 32\n");
+		if(rsf->AccessControlInfo.ServiceAccessControlNum > 34){
+			fprintf(stderr,"[EXHEADER ERROR] Too Many Service Names, maximum is 34\n");
 			return EXHDR_BAD_RSF_OPT;
 		}
 		for(int i = 0; i < rsf->AccessControlInfo.ServiceAccessControlNum; i++){
@@ -872,53 +913,21 @@ int GetARM11StaticMappings(ARM11KernelCapabilityDescriptor *desc, rsf_settings *
 	for(int i = 0; i < rsf->AccessControlInfo.MemoryMappingNum; i++){
 		if(strlen(rsf->AccessControlInfo.MemoryMapping[i])){
 			char *AddressStartStr = rsf->AccessControlInfo.MemoryMapping[i];
-			char *AddressEndStr = strstr(AddressStartStr,"-");
 			char *ROFlagStr = strstr(AddressStartStr,":");
 			bool IsRO = false; 
 			if(ROFlagStr)
 				IsRO = strcasecmp(ROFlagStr,":r") == 0 ? true : false;
 
-			if(AddressEndStr){
-				if(strlen(AddressEndStr) > 1) {
-					AddressEndStr = (AddressEndStr+1);
-					if(AddressEndStr == ROFlagStr)
-						AddressEndStr = NULL;
-				}
-				else 
-					AddressEndStr = NULL;
-			}
 			u32 AddressStart = strtoul(AddressStartStr,NULL,16);
 			if(!IsStartAddress(AddressStart)){
 				fprintf(stderr,"[EXHEADER ERROR] Address 0x%x (%s) is not valid mapping start address.\n",AddressStart,AddressStartStr);
 				return EXHDR_BAD_RSF_OPT;
 			}
-			if(!AddressEndStr){ // No End Addr Was Specified
-				SetARM11KernelDescValue(desc,descUsed,GetStaticMappingDesc(AddressStart,IsRO));
-				SetARM11KernelDescValue(desc,descUsed+1,GetStaticMappingDesc(AddressStart+0x1000, true));
-				descUsed += 2;
-				continue;
-			}
-
-			u32 AddressEnd = strtoul(AddressEndStr,NULL,16);
-			if(!IsEndAddress(AddressEnd)){
-				fprintf(stderr,"[EXHEADER ERROR] Address 0x%x (%s) is not valid mapping end address.\n",AddressEnd,AddressEndStr);
-				return EXHDR_BAD_RSF_OPT;
-			}
 
 			u32 DescStartAddr = GetStaticMappingDesc(AddressStart,IsRO);
-			u32 DescEndAddr = GetStaticMappingDesc(AddressEnd+0x1000,true);
-			if(DescStartAddr != DescEndAddr){
-				SetARM11KernelDescValue(desc,descUsed,DescStartAddr);
-				SetARM11KernelDescValue(desc,descUsed+1,DescEndAddr);
-				descUsed += 2;
-				continue;
-			}
-			else{
-				SetARM11KernelDescValue(desc,descUsed,GetStaticMappingDesc(AddressStart,IsRO));
-				SetARM11KernelDescValue(desc,descUsed+1,GetStaticMappingDesc(AddressStart+0x1000, true));
-				descUsed += 2;
-				continue;
-			}
+			SetARM11KernelDescValue(desc,descUsed,DescStartAddr);
+			descUsed++;
+			continue;
 		}
 	}
 	desc->num = descUsed;
@@ -978,6 +987,8 @@ int SetARM11KernelDescOtherCapabilities(ARM11KernelCapabilityDescriptor *desc, r
 		otherCapabilities |= othcap_RUNNABLE_ON_SLEEP;
 	if(rsf->AccessControlInfo.SpecialMemoryArrange)
 		otherCapabilities |= othcap_SPECIAL_MEMORY_ARRANGE;
+	if (rsf->AccessControlInfo.CanAccessCore2)
+		otherCapabilities |= othcap_CAN_ACCESS_CORE2;
 
 	if(rsf->AccessControlInfo.MemoryType){
 		if(strcasecmp(rsf->AccessControlInfo.MemoryType,"application") == 0)
